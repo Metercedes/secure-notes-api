@@ -22,7 +22,7 @@ version of this project shipped a default signing key in `application.properties
 deployment that forgot to override it signed tokens with a value published in this repository.
 
 Storage is an H2 file database under `./data` by default. Flyway owns the schema and Hibernate is
-set to `validate`, so a mapping that drifts from the migrations fails at startup rather than
+set to `validate`, so a mapping that drifts from the migrations fails at startup instead of
 silently altering tables.
 
 ```bash
