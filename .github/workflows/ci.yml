@@ -21,7 +21,7 @@ jobs:
           java-version: '25'
           distribution: temurin
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Build, test and verify coverage
         run: ./gradlew build --no-daemon
@@ -94,7 +94,7 @@ jobs:
           languages: java-kotlin
           queries: security-extended
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Compile for analysis
         run: ./gradlew compileJava --no-daemon
