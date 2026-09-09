@@ -51,3 +51,7 @@ bin/
 ### Logs ###
 logs/
 *.log
+### Application data ###
+data/
+*.mv.db
+*.trace.db

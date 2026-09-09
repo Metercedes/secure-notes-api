@@ -1,17 +1,16 @@
 plugins {
     java
     jacoco
-    id("org.springframework.boot") version "3.2.3"
-    id("io.spring.dependency-management") version "1.1.4"
-    id("org.owasp.dependencycheck") version "9.0.9"
+    id("org.springframework.boot") version "4.1.1"
+    id("org.cyclonedx.bom") version "3.4.1"
 }
 
-group = "com.example"
-version = "0.0.1-SNAPSHOT"
+group = "com.metercedes"
+version = "1.0.0"
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(25))
     }
 }
 
@@ -19,33 +18,40 @@ repositories {
     mavenCentral()
 }
 
+// Spring Boot 4.1.1 pins Tomcat 11.0.24, which grype reports as affected by
+// GHSA-9xv2-5v5q-p794, GHSA-h3x4-894j-xpx5 and GHSA-gcx9-497g-6cp6 (all fixed in 11.0.25).
+// Remove this block once the managed version reaches 11.0.25 or later.
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.apache.tomcat.embed") {
+            useVersion("11.0.25")
+            because("CVE fixes not yet in the Spring Boot 4.1.1 managed version")
+        }
+    }
+}
+
 dependencies {
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.1"))
+
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-security")
-    implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
-
     implementation("org.springframework.boot:spring-boot-starter-validation")
-    
-    implementation("org.flywaydb:flyway-core")
+    implementation("org.springframework.boot:spring-boot-starter-flyway")
 
-    compileOnly("org.projectlombok:lombok")
-    annotationProcessor("org.projectlombok:lombok")
+    implementation("io.jsonwebtoken:jjwt-api:0.13.0")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.13.0")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.13.0")
 
-    implementation("io.jsonwebtoken:jjwt-api:0.12.5")
-    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.5")
-    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.5")
-
-    runtimeOnly("org.xerial:sqlite-jdbc:3.45.2.0")
-    implementation("org.hibernate.orm:hibernate-community-dialects:6.4.4.Final")
-
-    runtimeOnly("org.postgresql:postgresql")
+    runtimeOnly("com.h2database:h2")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testImplementation("org.springframework.security:spring-security-test")
-    testImplementation("org.springframework.boot:spring-boot-testcontainers")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-security-test")
+}
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-parameters"))
 }
 
 tasks.withType<Test> {
@@ -53,9 +59,8 @@ tasks.withType<Test> {
     finalizedBy(tasks.jacocoTestReport)
 }
 
-// JaCoCo Configuration for code coverage reporting
 jacoco {
-    toolVersion = "0.8.11"
+    toolVersion = "0.8.13"
 }
 
 tasks.jacocoTestReport {
@@ -63,23 +68,24 @@ tasks.jacocoTestReport {
     reports {
         xml.required.set(true)
         html.required.set(true)
-        html.outputLocation.set(layout.buildDirectory.dir("reports/jacoco/html"))
     }
 }
 
 tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
-            limit {
-                minimum = "0.50".toBigDecimal()
-            }
+            limit { minimum = "0.70".toBigDecimal() }
         }
     }
 }
 
-// OWASP Dependency Check Configuration
-dependencyCheck {
-    failBuildOnCVSS = 7.0f // Fail on high severity vulnerabilities
-    formats = listOf("HTML", "JSON")
-    suppressionFile = "owasp-suppressions.xml"
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
+}
+
+
+tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
+    includeConfigs.set(listOf("runtimeClasspath"))
+    jsonOutput.set(layout.buildDirectory.file("reports/sbom/sbom.json"))
+    projectType.set(org.cyclonedx.model.Component.Type.APPLICATION)
 }
