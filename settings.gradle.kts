@@ -1,2 +1,1 @@
-rootProject.name = "LAB10"
-
+rootProject.name = "secure-notes-api"

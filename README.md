@@ -1,174 +1,138 @@
-# LAB10 - Secure Notes Application
+# secure-notes-api
 
-A Spring Boot REST API application demonstrating secure web development practices including JWT authentication, authorization, input validation, and security headers.
+A Spring Boot REST API for personal notes, built to exercise the authentication, authorisation
+and supply-chain controls that a small production service needs. Users register, receive a short
+access token and a rotating refresh token, and can only ever read or modify their own notes.
 
-## Prerequisites
+The interesting part is not the notes. It is the security behaviour around them, and the tests
+that prove it: refresh-token rotation with replay detection, per-owner access control verified by
+negative tests, and a build that fails when a dependency has a known critical vulnerability.
 
-- Java 17
-- Gradle (wrapper included)
+## Running it
 
-## How to Run
+Requires JDK 25. The Gradle wrapper downloads everything else.
 
 ```bash
-# Start the application
+export SECURITY_JWT_SECRET="$(openssl rand -base64 48)"
 ./gradlew bootRun
 ```
 
-The application runs on:
-- **HTTPS**: https://localhost:8443
-- **HTTP**: http://localhost:8080 (redirects to HTTPS)
+The application refuses to start without `SECURITY_JWT_SECRET`. That is deliberate: an earlier
+version of this project shipped a default signing key in `application.properties`, which meant any
+deployment that forgot to override it signed tokens with a value published in this repository.
 
-> Note: The application uses a self-signed SSL certificate for development. Your browser may show a security warning - this is expected for localhost testing.
-
-## Running Tests
+Storage is an H2 file database under `./data` by default. Flyway owns the schema and Hibernate is
+set to `validate`, so a mapping that drifts from the migrations fails at startup rather than
+silently altering tables.
 
 ```bash
-./gradlew test
+./gradlew test          # 98 tests
+./gradlew build         # test + 70% instruction coverage gate
+./gradlew cyclonedxDirectBom   # writes build/reports/sbom/sbom.json
 ```
 
-Tests include unit tests and integration tests (106 total tests).
+## API
 
-## Project Structure
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/auth/register` | none | Create an account, returns a token pair |
+| POST | `/api/auth/login` | none | Exchange credentials for a token pair |
+| POST | `/api/auth/refresh` | refresh token | Rotate the refresh token, issue a new access token |
+| POST | `/api/auth/logout` | access token | Revoke the caller's refresh tokens |
+| GET | `/api/notes` | access token | List the caller's notes |
+| POST | `/api/notes` | access token | Create a note |
+| GET/PUT/PATCH/DELETE | `/api/notes/{id}` | access token | Operate on a note the caller owns |
+| GET | `/api/admin/users` | ROLE_ADMIN | List accounts, without password hashes |
+| PATCH | `/api/admin/users/{id}/role` | ROLE_ADMIN | Assign ROLE_USER or ROLE_ADMIN |
 
-```
-src/main/java/com/example/LAB10/
-├── config/          # Security and application configuration
-├── controller/      # REST API endpoints
-├── dto/             # Data Transfer Objects with validation
-├── model/           # JPA entities
-├── repository/      # Spring Data JPA repositories
-├── security/        # JWT filter, rate limiting
-├── service/         # Business logic
-└── validator/       # Custom validation rules
-```
+A worked example:
 
-## Features Implemented
-
-### Lab 10: HTTP/REST API
-- RESTful endpoints using GET, POST, PUT, PATCH, DELETE
-- Proper HTTP status codes (200, 201, 400, 401, 403, 404, 429)
-- Content-Type handling and validation
-- Request header reading
-
-### Lab 11-12: Authentication
-- JWT-based authentication (stateless)
-- Access tokens (15 min expiry) and refresh tokens (24 hour expiry)
-- Token refresh with rotation (old tokens invalidated)
-- User registration and login
-- Logout with token revocation
-- BCrypt password hashing (strength 12)
-
-### Lab 13: Security
-- Input validation with custom validators
-- Strong password policy enforcement
-- SQL injection prevention (parameterized queries)
-- Security headers (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
-- Rate limiting (60 req/min general, 10 req/min for auth endpoints)
-- User data isolation (users can only access their own data)
-- Role-based access control (USER, ADMIN roles)
-- Security event logging
-
-### Lab 14: Testing & CI/CD
-- Unit tests for services and validators
-- Integration tests for authentication and access control
-- JaCoCo code coverage reporting
-- GitHub Actions CI pipeline
-- OWASP dependency vulnerability scanning
-
-### Bonus Features
-- HTTPS with SSL/TLS
-- HTTP to HTTPS redirect
-- HSTS (Strict-Transport-Security) header
-
-## API Endpoints
-
-### Authentication (Public)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login and get tokens |
-| POST | `/api/auth/refresh` | Refresh access token |
-| POST | `/api/auth/logout` | Logout and revoke tokens |
-
-### Notes (Requires Authentication)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/notes` | Get all user's notes |
-| GET | `/api/notes/{id}` | Get specific note |
-| POST | `/api/notes` | Create new note |
-| PUT | `/api/notes/{id}` | Update note (full) |
-| PATCH | `/api/notes/{id}` | Update note (partial) |
-| DELETE | `/api/notes/{id}` | Delete note |
-
-### Admin (Requires ADMIN role)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/admin/users` | List all users |
-| GET | `/api/admin/stats` | System statistics |
-
-## Example API Usage
-
-### Register a User
 ```bash
-curl -k -X POST https://localhost:8443/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"testuser","email":"test@example.com","password":"SecurePass1!"}'
+BASE=http://localhost:8080
+
+TOKENS=$(curl -sS -X POST $BASE/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","email":"alice@example.test","password":"SecureP@ss1"}')
+
+ACCESS=$(echo "$TOKENS" | jq -r .accessToken)
+
+curl -sS -X POST $BASE/api/notes \
+  -H "Authorization: Bearer $ACCESS" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"First note","content":"hello"}'
 ```
 
-### Login
-```bash
-curl -k -X POST https://localhost:8443/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"testuser","password":"SecurePass1!"}'
+## Security behaviour
+
+**Access tokens.** HS256 JWTs with a 15 minute lifetime, carrying an issuer that is verified on
+every parse. The signing key must decode from Base64 to at least 256 bits or the application will
+not start.
+
+**Refresh tokens.** 256 bits from `SecureRandom`, returned to the client once and stored only as a
+SHA-256 digest, so a database disclosure cannot be replayed against `/api/auth/refresh`. Each
+rotation revokes the token it replaces. Presenting an already-revoked token is treated as evidence
+that the token leaked, and revokes every outstanding token for that account.
+
+That last behaviour has a subtlety worth calling out, because getting it wrong is silent: the
+revocation runs in its own transaction. The rotation attempt ends by throwing, which rolls its own
+transaction back, and a revocation written inside that transaction would be rolled back with it.
+
+**Authorisation.** Ownership is checked in `NoteService` rather than in controllers, so every read
+and write path shares one check. A note owned by someone else returns 404 rather than 403, so the
+API does not confirm which note ids exist.
+
+**Rate limiting.** Fixed per-minute windows, tighter on the authentication endpoints. The client
+address comes from `getRemoteAddr()` and `X-Forwarded-For` is ignored unless
+`security.rate-limit.trust-forwarded-for` is set, because an attacker who can vary that header can
+otherwise defeat the limit entirely. The bucket map is bounded so a spoofed-address flood cannot
+exhaust the heap.
+
+**Passwords.** BCrypt at strength 12, with a policy requiring length, mixed case, a digit and a
+symbol, and rejecting a list of common passwords.
+
+Limitations, and what is deliberately not claimed, are in [docs/threat-model.md](docs/threat-model.md).
+
+## Supply chain
+
+`./gradlew build` produces a CycloneDX 1.6 SBOM. CI generates it on every push and scans it with
+Grype, failing on high or critical findings.
+
+This is not decorative. The current build pins `org.apache.tomcat.embed` to 11.0.25 because the
+version Spring Boot 4.1.1 manages, 11.0.24, is affected by GHSA-9xv2-5v5q-p794,
+GHSA-h3x4-894j-xpx5 and GHSA-gcx9-497g-6cp6. The override in `build.gradle.kts` records why and
+when it can be removed.
+
+## Layout
+
+```
+src/main/java/com/metercedes/securenotes/
+├── config/       Spring Security filter chain, password encoder, authentication provider
+├── controller/   REST endpoints and the exception-to-status mapping
+├── dto/          Request and response records with Bean Validation constraints
+├── exception/    Domain exceptions
+├── model/        JPA entities
+├── repository/   Spring Data repositories
+├── security/     JWT issuing and parsing, bearer filter, rate limiting
+├── service/      Account, note and refresh-token logic
+└── validator/    Username and password policy constraints
 ```
 
-### Create a Note (with token)
-```bash
-curl -k -X POST https://localhost:8443/api/notes \
-  -H "Authorization: Bearer <your-access-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"My Note","content":"Note content here"}'
-```
+## Testing
 
-## Password Requirements
+98 tests. The ones that matter are the negative cases:
 
-Passwords must have:
-- Minimum 8 characters
-- At least one uppercase letter
-- At least one lowercase letter
-- At least one digit
-- At least one special character (!@#$%^&* etc.)
-- Cannot be a common password (e.g., "password123")
+- `AccessControlIntegrationTest` — a second account attempting to read, replace, patch and delete
+  another user's note; a normal user attempting admin endpoints; a registration body that tries to
+  set its own role; unauthenticated and forged-token requests.
+- `AuthIntegrationTest` — refresh rotation, reuse of a rotated token, revocation of the whole token
+  family after a replay, unauthenticated logout, and account enumeration through login responses.
+- `JwtServiceTest` — short keys, non-Base64 keys, foreign signatures, `alg: none` tokens, expiry
+  and subject mismatch.
 
-## Security Headers
+## History
 
-The application includes these security headers:
-- `X-Frame-Options: DENY` - Prevents clickjacking
-- `X-Content-Type-Options: nosniff` - Prevents MIME sniffing
-- `Content-Security-Policy` - Controls resource loading
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Strict-Transport-Security` - Forces HTTPS (HSTS)
-
-## Technologies Used
-
-- Java 17
-- Spring Boot 3.2
-- Spring Security
-- Spring Data JPA
-- JWT (jjwt library)
-- SQLite database
-- Flyway (database migrations)
-- JaCoCo (code coverage)
-- JUnit 5 & Mockito (testing)
-
-## Configuration
-
-Key configuration in `application.properties`:
-- JWT expiration times
-- Rate limiting thresholds
-- SSL/HTTPS settings
-- Database connection
-
-## Author
-
-Created for Web Security course - Labs 10, 11-12, 13, 14
+This started as a university lab exercise and was rebuilt: package renamed, Lombok removed
+(`@Data` on JPA entities generates `equals`/`hashCode` over mutable fields), Spring Boot upgraded
+3.2.3 to 4.1.1, the committed keystore and default signing key removed, coursework controllers
+deleted, and refresh tokens changed from plaintext UUIDs to hashed random tokens with replay
+detection.

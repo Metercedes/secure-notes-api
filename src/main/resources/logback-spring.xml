@@ -1,60 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- Console appender for development -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Rolling file appender for all logs -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/application.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logs/application.%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>30</maxHistory>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Dedicated security log file -->
-    <appender name="SECURITY" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <!-- Authentication, authorisation and rate-limiting events are kept apart from application
+         noise and retained longer, so an investigation reads one file. -->
+    <appender name="SECURITY_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>logs/security.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>logs/security.%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>90</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [SECURITY] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Security logger - logs authentication, authorization, and rate limiting events -->
     <logger name="SECURITY" level="INFO" additivity="false">
-        <appender-ref ref="SECURITY"/>
+        <appender-ref ref="SECURITY_FILE"/>
         <appender-ref ref="CONSOLE"/>
     </logger>
 
-    <!-- Security-related components -->
-    <logger name="com.example.LAB10.security" level="DEBUG" additivity="false">
-        <appender-ref ref="SECURITY"/>
-        <appender-ref ref="CONSOLE"/>
-    </logger>
-
-    <logger name="com.example.LAB10.controller.GlobalExceptionHandler" level="INFO" additivity="false">
-        <appender-ref ref="SECURITY"/>
-        <appender-ref ref="CONSOLE"/>
-    </logger>
-
-    <!-- Spring Security framework logs -->
     <logger name="org.springframework.security" level="INFO" additivity="false">
-        <appender-ref ref="SECURITY"/>
+        <appender-ref ref="SECURITY_FILE"/>
         <appender-ref ref="CONSOLE"/>
     </logger>
 
-    <!-- Root logger -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
