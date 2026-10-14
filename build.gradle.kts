@@ -2,7 +2,7 @@ plugins {
     java
     jacoco
     id("org.springframework.boot") version "4.1.1"
-    id("org.cyclonedx.bom") version "3.4.1"
+    id("org.cyclonedx.bom") version "3.5.1"
 }
 
 group = "com.metercedes"
